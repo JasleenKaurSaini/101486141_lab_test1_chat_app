@@ -14,14 +14,13 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// serve views
 app.use("/views", express.static(path.join(__dirname, "views")));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "views", "login.html")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "views", "login.html"));
+});
 
-// predefined rooms
 const ROOMS = ["devops", "cloud computing", "covid19", "sports", "nodeJS", "news"];
 
-// ------------------- Mongo + Schemas (in same file) -------------------
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
@@ -53,48 +52,61 @@ const User = mongoose.model("User", userSchema);
 const GroupMessage = mongoose.model("GroupMessage", groupMsgSchema);
 const PrivateMessage = mongoose.model("PrivateMessage", privateMsgSchema);
 
-// ------------------- Helper: auth middleware -------------------
+function getTokenFromHeader(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) return null;
+  return authHeader.slice(7);
+}
+
 function auth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const token = getTokenFromHeader(req);
   if (!token) return res.status(401).json({ message: "No token" });
 
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET); // { id, username }
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch (e) {
     return res.status(401).json({ message: "Invalid token" });
   }
 }
 
-// ------------------- API -------------------
-app.get("/api/rooms", (req, res) => res.json(ROOMS));
+app.get("/api/rooms", (req, res) => {
+  res.json(ROOMS);
+});
 
-// signup
 app.post("/api/signup", async (req, res) => {
   try {
     const { username, firstname, lastname, password } = req.body;
+
     if (!username || !firstname || !lastname || !password) {
       return res.status(400).json({ message: "All fields required" });
     }
 
-    const exists = await User.findOne({ username });
-    if (exists) return res.status(409).json({ message: "Username already exists" });
+    const existing = await User.findOne({ username });
+    if (existing) return res.status(409).json({ message: "Username already exists" });
 
-    const hashed = await bcrypt.hash(password, 10);
-    await User.create({ username, firstname, lastname, password: hashed });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await User.create({
+      username,
+      firstname,
+      lastname,
+      password: hashedPassword
+    });
 
     res.json({ message: "Signup success" });
   } catch (e) {
+    console.error("Signup error:", e);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// login
 app.post("/api/login", async (req, res) => {
   try {
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ message: "Missing credentials" });
+
+    if (!username || !password) {
+      return res.status(400).json({ message: "Missing credentials" });
+    }
 
     const user = await User.findOne({ username });
     if (!user) return res.status(401).json({ message: "Invalid username/password" });
@@ -111,25 +123,34 @@ app.post("/api/login", async (req, res) => {
     res.json({
       message: "Login success",
       token,
-      user: { username: user.username, firstname: user.firstname, lastname: user.lastname }
+      user: {
+        username: user.username,
+        firstname: user.firstname,
+        lastname: user.lastname
+      }
     });
   } catch (e) {
+    console.error("Login error:", e);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// list users (for private chat dropdown)
 app.get("/api/users", auth, async (req, res) => {
-  const users = await User.find({}, { username: 1, _id: 0 }).sort({ username: 1 });
-  res.json(users.map(u => u.username));
+  try {
+    const users = await User.find({}, { username: 1, _id: 0 }).sort({ username: 1 });
+    res.json(users.map((u) => u.username));
+  } catch (e) {
+    console.error("Users list error:", e);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// ------------------- Socket.io -------------------
-const onlineUsers = new Map(); // username -> socketId
+const onlineUsers = new Map();
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
   if (!token) return next(new Error("No token"));
+
   try {
     socket.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
@@ -140,66 +161,81 @@ io.use((socket, next) => {
 
 io.on("connection", (socket) => {
   const username = socket.user.username;
+
   onlineUsers.set(username, socket.id);
   io.emit("online_users", Array.from(onlineUsers.keys()));
 
-  // join room
-  socket.on("join_room", async ({ room }) => {
+  socket.on("join_room", async (data) => {
+    const room = data?.room;
     if (!ROOMS.includes(room)) return;
 
     if (socket.currentRoom) socket.leave(socket.currentRoom);
+
     socket.join(room);
     socket.currentRoom = room;
 
     socket.emit("system", `Joined room: ${room}`);
     socket.to(room).emit("system", `${username} joined the room`);
 
-    // load last 50 messages
     const last = await GroupMessage.find({ room }).sort({ date_sent: 1 }).limit(50);
     socket.emit("room_history", last);
   });
 
-  // leave room
   socket.on("leave_room", () => {
-    if (!socket.currentRoom) return;
-    const r = socket.currentRoom;
-    socket.leave(r);
-    socket.to(r).emit("system", `${username} left the room`);
+    const current = socket.currentRoom;
+    if (!current) return;
+
+    socket.leave(current);
+    socket.to(current).emit("system", `${username} left the room`);
     socket.currentRoom = null;
+
     socket.emit("system", "You left the room");
   });
 
-  // room message + store
-  socket.on("room_message", async ({ message }) => {
-    if (!socket.currentRoom || !message?.trim()) return;
-    const doc = await GroupMessage.create({
+  socket.on("room_message", async (data) => {
+    const msg = data?.message;
+    const room = socket.currentRoom;
+
+    if (!room || !msg || !msg.trim()) return;
+
+    const saved = await GroupMessage.create({
       from_user: username,
-      room: socket.currentRoom,
-      message: message.trim()
+      room,
+      message: msg.trim()
     });
-    io.to(socket.currentRoom).emit("room_message", doc);
+
+    io.to(room).emit("room_message", saved);
   });
 
-  // private message + store
-  socket.on("private_message", async ({ to_user, message }) => {
-    if (!to_user || !message?.trim()) return;
-    const doc = await PrivateMessage.create({
+  socket.on("private_message", async (data) => {
+    const to_user = data?.to_user;
+    const msg = data?.message;
+
+    if (!to_user || !msg || !msg.trim()) return;
+
+    const saved = await PrivateMessage.create({
       from_user: username,
       to_user,
-      message: message.trim()
+      message: msg.trim()
     });
 
-    socket.emit("private_message", doc);
+    socket.emit("private_message", saved);
 
-    const toSocket = onlineUsers.get(to_user);
-    if (toSocket) io.to(toSocket).emit("private_message", doc);
+    const receiverSocketId = onlineUsers.get(to_user);
+    if (receiverSocketId) io.to(receiverSocketId).emit("private_message", saved);
   });
 
-  // typing indicator (1-to-1)
-  socket.on("typing_private", ({ to_user, isTyping }) => {
-    const toSocket = onlineUsers.get(to_user);
-    if (!toSocket) return;
-    io.to(toSocket).emit("typing_private", { from_user: username, isTyping: !!isTyping });
+  socket.on("typing_private", (data) => {
+    const to_user = data?.to_user;
+    const isTyping = !!data?.isTyping;
+
+    const receiverSocketId = onlineUsers.get(to_user);
+    if (!receiverSocketId) return;
+
+    io.to(receiverSocketId).emit("typing_private", {
+      from_user: username,
+      isTyping
+    });
   });
 
   socket.on("disconnect", () => {
@@ -208,6 +244,7 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(process.env.PORT || 3000, () => {
-  console.log("Server running on port", process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log("Server running on port", PORT);
 });

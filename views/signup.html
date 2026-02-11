@@ -4,40 +4,55 @@
   <meta charset="utf-8">
   <title>Signup</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root{--lav:#F4E9FF; --purple:#6F2DBD; --purple2:#8E44AD;}
+    body{background: var(--lav);}
+    .card{border:0; border-radius:18px; box-shadow:0 10px 30px rgba(111,45,189,.15);}
+    .btn-purple{background:var(--purple); border:0;}
+    .btn-purple:hover{background:var(--purple2);}
+    .brand{color:var(--purple); font-weight:800; letter-spacing:.3px;}
+    .soft-input{border-radius:14px; border:1px solid rgba(111,45,189,.25);}
+    .soft-input:focus{border-color:var(--purple); box-shadow:0 0 0 .2rem rgba(111,45,189,.15);}
+  </style>
 </head>
-<body class="bg-light">
-<div class="container mt-5" style="max-width:520px;">
-  <div class="card p-4">
-    <h3>Signup</h3>
-    <input id="username" class="form-control mb-2" placeholder="Username">
-    <input id="firstname" class="form-control mb-2" placeholder="First name">
-    <input id="lastname" class="form-control mb-2" placeholder="Last name">
-    <input id="password" type="password" class="form-control mb-3" placeholder="Password">
-    <button id="btn" class="btn btn-primary w-100">Create Account</button>
+<body>
+    <div class="container mt-5" style="max-width:520px;">
+    <div class="text-center mb-3 brand" style="font-size:26px;">Chat Server</div>
+    <div class="card p-4">
+    <h4 class="mb-3" style="color:var(--purple);">Signup</h4>
+
+    <input id="username" class="form-control soft-input mb-2" placeholder="Username">
+    <input id="firstname" class="form-control soft-input mb-2" placeholder="First name">
+    <input id="lastname" class="form-control soft-input mb-2" placeholder="Last name">
+    <input id="password" type="password" class="form-control soft-input mb-3" placeholder="Password">
+
+    <button id="btn" class="btn btn-purple text-white w-100">Create Account</button>
     <div id="msg" class="text-danger mt-3"></div>
-    <a class="mt-2 d-block" href="/views/login.html">Go to Login</a>
+
+    <a class="mt-3 d-block" href="/views/login.html" style="color:var(--purple);">Go to Login</a>
   </div>
 </div>
 
 <script>
 document.getElementById("btn").onclick = async () => {
-  document.getElementById("msg").innerText = "";
-  const body = {
-    username: username.value.trim(),
-    firstname: firstname.value.trim(),
-    lastname: lastname.value.trim(),
-    password: password.value
+    msg.innerText = "";
+    const body = {
+        username: username.value.trim(),
+        firstname: firstname.value.trim(),
+        lastname: lastname.value.trim(),
+        password: password.value
   };
-
+  
   const res = await fetch("/api/signup", {
     method: "POST",
     headers: {"Content-Type":"application/json"},
     body: JSON.stringify(body)
   });
+  
   const data = await res.json();
   if (!res.ok) return msg.innerText = data.message || "Signup failed";
 
-  alert("Signup successful, now login!");
+  alert("Signup successful! Please login.");
   window.location.href = "/views/login.html";
 };
 </script>
